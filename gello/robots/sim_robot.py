@@ -51,6 +51,85 @@ def attach_hand_to_arm(
     attachment_site.attach(hand_mjcf)
 
 
+def add_table_and_object(arena: mjcf.RootElement) -> None:
+    """Adiciona uma mesa solida, uma caixa aberta em cima, e um cubo ao lado.
+
+    Cenario de teste de manipulacao no simulador: o UR5 simulado nao atravessa
+    a mesa (colisao real) e o cubo tem freejoint, por isso pode ser agarrado,
+    levantado e colocado dentro da caixa.
+    """
+    # Mesa em frente da base do robo, no eixo Y. Trocar o sinal de table_y
+    # para a colocar do outro lado do UR5.
+    table_x, table_y = 0.0, -0.5
+    table_half_size = 0.4
+    table_half_height = 0.05
+    table_top_z = 0.10  # altura do tampo
+
+    # Mesa: bloco solido com o tampo a table_top_z
+    table = arena.worldbody.add(
+        "body", name="table", pos=(table_x, table_y, table_top_z - table_half_height)
+    )
+    table.add(
+        "geom",
+        name="table_top",
+        type="box",
+        size=(table_half_size, table_half_size, table_half_height),
+        rgba=(0.55, 0.35, 0.2, 1),
+    )
+
+    # Caixa: "tina" aberta em cima, feita com fundo + 4 paredes finas
+    wall = 0.005
+    inner = 0.12  # meia-largura interior da caixa
+    box = arena.worldbody.add("body", name="box", pos=(table_x, table_y, table_top_z))
+    box.add(
+        "geom", name="box_bottom", type="box",
+        size=(inner, inner, wall), pos=(0, 0, wall),
+        rgba=(0.2, 0.3, 0.8, 1),
+    )
+    box.add(
+        "geom", name="box_wall_pos_x", type="box",
+        size=(wall, inner, 0.05), pos=(inner, 0, 0.05),
+        rgba=(0.2, 0.3, 0.8, 1),
+    )
+    box.add(
+        "geom", name="box_wall_neg_x", type="box",
+        size=(wall, inner, 0.05), pos=(-inner, 0, 0.05),
+        rgba=(0.2, 0.3, 0.8, 1),
+    )
+    box.add(
+        "geom", name="box_wall_pos_y", type="box",
+        size=(inner, wall, 0.05), pos=(0, inner, 0.05),
+        rgba=(0.2, 0.3, 0.8, 1),
+    )
+    box.add(
+        "geom", name="box_wall_neg_y", type="box",
+        size=(inner, wall, 0.05), pos=(0, -inner, 0.05),
+        rgba=(0.2, 0.3, 0.8, 1),
+    )
+
+    # Cubo ao lado da caixa, em cima da mesa, com freejoint (pode ser
+    # agarrado e colocado dentro da caixa).
+    cube_half = 0.015  # meio-lado do cubo (3 cm de aresta)
+    cube_x = table_x + inner + wall + cube_half + 0.06
+    cube_y = table_y
+    cube_z = table_top_z + cube_half
+    cube = arena.worldbody.add("body", name="cube", pos=(cube_x, cube_y, cube_z))
+    cube.add("freejoint", name="cube_joint")
+    cube.add(
+        "geom", name="cube_geom", type="box",
+        size=(cube_half, cube_half, cube_half), rgba=(0.9, 0.2, 0.1, 1),
+        mass=0.05,
+    )
+
+    # O freejoint do cubo acrescenta 7 valores (posicao+rotacao) ao estado do
+    # modelo - o keyframe "home" (pose inicial) tem de ser alargado para
+    # incluir esses 7 valores, senao o MuJoCo recusa-se a carregar o modelo.
+    keys = arena.find_all("key")
+    if len(keys) > 0:
+        key = keys[0]
+        key.qpos = np.concatenate([key.qpos, [cube_x, cube_y, cube_z, 1, 0, 0, 0]])
+
+
 def build_scene(robot_xml_path: str, gripper_xml_path: Optional[str] = None):
     # assert robot_xml_path.endswith(".xml")
 
@@ -65,6 +144,8 @@ def build_scene(robot_xml_path: str, gripper_xml_path: Optional[str] = None):
 
     arena.worldbody.attach(arm_simulate)
     # arena.worldbody.attach(arm_copy)
+
+    add_table_and_object(arena)
 
     return arena
 
@@ -231,13 +312,6 @@ class MujocoRobotServer:
 
                 if self._print_joints:
                     print(self._joint_state)
-
-                # Example modification of a viewer option: toggle contact points every two seconds.
-                with viewer.lock():
-                    # TODO remove?
-                    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = int(
-                        self._data.time % 2
-                    )
 
                 # Pick up changes to the physics state, apply perturbations, update options from GUI.
                 viewer.sync()

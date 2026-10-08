@@ -43,9 +43,38 @@ class DynamixelRobotConfig:
         )
 
 
+# GELLO (leader) para UR5 (follower).
+# Braco: servos Dynamixel XL330-M288 nas juntas 1-6, XL330-M077 na garra (ID 7).
+#
+# Os offsets abaixo sao especificos deste braco fisico. Foram obtidos com o
+# braco na pose de referencia (forma em "L", ver imgs/gello_matching_joints.jpg)
+# e o comando:
+#   python scripts/gello_get_offset.py \
+#       --start-joints 0 -1.57 1.57 -1.57 -1.57 0 --joint-signs 1 1 -1 1 1 1 \
+#       --port <porta do GELLO>
+# Ao usar outro braco, ou o adaptador USB noutro computador, correr esse
+# comando de novo e substituir os valores (ver o guia de operacao).
+GELLO_UR5 = DynamixelRobotConfig(
+    joint_ids=(1, 2, 3, 4, 5, 6),
+    joint_offsets=(
+        3 * np.pi / 2,
+        3 * np.pi / 2,
+        3 * np.pi / 2,
+        3 * np.pi / 2,
+        4 * np.pi / 2,
+        1 * np.pi / 2,
+    ),
+    joint_signs=(1, 1, -1, 1, 1, 1),
+    gripper_config=(7, 196.235546875, 154.435546875),
+)
+
+
 PORT_CONFIG_MAP: Dict[str, DynamixelRobotConfig] = {
+    # Porta em que o adaptador U2D2 aparece (macOS). Noutro computador/SO o
+    # nome muda (ex. /dev/ttyUSB0 em Linux) - acrescentar aqui a entrada.
+    "/dev/cu.usbserial-FTBENW9B8": GELLO_UR5,
     # xArm
-    "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT3M9NVB-if00-port0": DynamixelRobotConfig(
+    "/dev/cu.usbserial-FTBENW9B8": DynamixelRobotConfig(
         joint_ids=(1, 2, 3, 4, 5, 6, 7),
         joint_offsets=(
             3 * np.pi / 2,
@@ -104,6 +133,20 @@ PORT_CONFIG_MAP: Dict[str, DynamixelRobotConfig] = {
         ),
         joint_signs=(1, 1, -1, 1, 1, 1),
         gripper_config=(7, 286, 248),
+    ),
+        # UR INESC
+    "/dev/cu.usbserial-FTBENW9B": DynamixelRobotConfig(
+        joint_ids=(1, 2, 3, 4, 5, 6),
+        joint_offsets=(
+            0,
+            1 * np.pi / 2 + np.pi,
+            np.pi / 2 + 0 * np.pi,
+            0 * np.pi + np.pi / 2,
+            np.pi - 2 * np.pi / 2,
+            -1 * np.pi / 2 + 2 * np.pi,
+        ),
+        joint_signs=(1, 1, -1, 1, 1, 1),
+        gripper_config=(7, 20, -22),
     ),
 }
 
