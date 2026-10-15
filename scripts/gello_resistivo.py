@@ -12,6 +12,10 @@ Dois usos:
 
 Corre no lugar do Terminal 2 (run_env.py). Requer o simulador ou o UR5 no
 Terminal 1, como na teleoperacao normal.
+
+Com --bimanual comanda dois GELLOs ao mesmo tempo (ex. com o simulador
+sim_ur_bimanual): --port-left / --port-right, e a mola e aplicada aos dois
+gatilhos.
 """
 
 from __future__ import annotations
@@ -32,6 +36,10 @@ GELLO_REPO = Path(__file__).resolve().parent.parent
 
 DEFAULT_PORT = "/dev/cu.usbserial-FTBENXKL"
 START_JOINTS = (0.0, -1.57, 1.57, -1.57, -1.57, 0.0, 0.0)
+# Bimanual: o GELLO esquerdo e o simetrico do direito (pose espelhada).
+START_JOINTS_LEFT_MIRRORED = (0.0, -1.57, -1.57, -1.57, 1.57, 0.0, 0.0)
+DEFAULT_PORT_LEFT = "/dev/cu.usbserial-FTBENW9B"  # GELLO laranja
+DEFAULT_PORT_RIGHT = "/dev/cu.usbserial-FTBENXKL"  # GELLO preto
 
 CURRENT_BASED_POSITION_MODE = 5
 ADDR_TORQUE_ENABLE = 64
@@ -63,7 +71,7 @@ OriginalDynamixelDriver = dynamixel_driver_module.DynamixelDriver
 class ResistiveGelloAgent(OriginalGelloAgent):
     """GelloAgent com referência elasto-plástica e torque sempre limitado."""
 
-    last_instance: "ResistiveGelloAgent | None" = None
+    instances: "list[ResistiveGelloAgent]" = []
 
     def __init__(
         self,
@@ -79,7 +87,7 @@ class ResistiveGelloAgent(OriginalGelloAgent):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        ResistiveGelloAgent.last_instance = self
+        ResistiveGelloAgent.instances.append(self)
 
         motor_count = self._robot.num_dofs()
         if motor_count != 7:
@@ -458,6 +466,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument(
+        "--bimanual",
+        action="store_true",
+        help="dois GELLOs (--port-left / --port-right), ex. sim_ur_bimanual",
+    )
+    parser.add_argument("--port-left", default=DEFAULT_PORT_LEFT)
+    parser.add_argument("--port-right", default=DEFAULT_PORT_RIGHT)
+    parser.add_argument(
         "--motor-currents-ma",
         type=int,
         nargs=7,
@@ -524,30 +539,47 @@ def main() -> None:
     original_control_loop = control_utils.run_control_loop
 
     def run_control_loop_with_resistive_hold(env, agent, *args, **kwargs):
-        agent.enable_resistive_hold()
+        # Em modo bimanual o agente e um BimanualAgent com dois GELLOs dentro.
+        gellos = [
+            getattr(agent, "agent_left", None),
+            getattr(agent, "agent_right", None),
+        ]
+        gellos = [g for g in gellos if g is not None] or [agent]
         try:
+            for gello in gellos:
+                gello.enable_resistive_hold()
             return original_control_loop(env, agent, *args, **kwargs)
         finally:
-            agent.close()
+            for gello in gellos:
+                gello.close()
 
     control_utils.run_control_loop = run_control_loop_with_resistive_hold
 
     from experiments import run_env
 
-    run_args = run_env.Args(
-        agent="gello",
-        gello_port=cli.port,
-        start_joints=START_JOINTS,
-        hz=100,
-    )
+    if cli.bimanual:
+        run_args = run_env.Args(
+            agent="gello",
+            bimanual=True,
+            gello_port_left=cli.port_left,
+            gello_port_right=cli.port_right,
+            start_joints=START_JOINTS_LEFT_MIRRORED + START_JOINTS,
+            hz=100,
+        )
+    else:
+        run_args = run_env.Args(
+            agent="gello",
+            gello_port=cli.port,
+            start_joints=START_JOINTS,
+            hz=100,
+        )
 
     try:
         run_env.main(run_args)
     except KeyboardInterrupt:
         print("\nInterrompido pelo utilizador.")
     finally:
-        instance = ResistiveGelloAgent.last_instance
-        if instance is not None:
+        for instance in ResistiveGelloAgent.instances:
             instance.close()
 
 

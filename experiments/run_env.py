@@ -32,6 +32,10 @@ class Args:
     start_joints: Optional[Tuple[float, ...]] = None
 
     gello_port: Optional[str] = None
+    gello_port_left: Optional[str] = None
+    """Com --bimanual: porta do GELLO que comanda o braco esquerdo."""
+    gello_port_right: Optional[str] = None
+    """Com --bimanual: porta do GELLO que comanda o braco direito."""
     mock: bool = False
     use_save_interface: bool = False
     data_dir: str = "~/bc_data"
@@ -60,17 +64,31 @@ def main(args):
     if args.bimanual:
         if args.agent == "gello":
             # dynamixel control box port map (to distinguish left and right gello)
-            right = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT7WBG6A-if00-port0"
-            left = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT7WBEIA-if00-port0"
+            right = (
+                args.gello_port_right
+                or "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT7WBG6A-if00-port0"
+            )
+            left = (
+                args.gello_port_left
+                or "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT7WBEIA-if00-port0"
+            )
+            # --start-joints com 7 valores vale para os dois bracos; com 14,
+            # os primeiros 7 sao do esquerdo e os outros 7 do direito.
+            start_left = start_right = None
+            if args.start_joints is not None:
+                start = np.resize(args.start_joints, 14)
+                start_left, start_right = start[:7], start[7:]
             agent_cfg = {
                 "_target_": "gello.agents.agent.BimanualAgent",
                 "agent_left": {
                     "_target_": "gello.agents.gello_agent.GelloAgent",
                     "port": left,
+                    "start_joints": start_left,
                 },
                 "agent_right": {
                     "_target_": "gello.agents.gello_agent.GelloAgent",
                     "port": right,
+                    "start_joints": start_right,
                 },
             }
         elif args.agent == "quest":
@@ -111,9 +129,14 @@ def main(args):
 
         # System setup specific. This reset configuration works well on our setup. If you are mounting the robot
         # differently, you need a separate reset joint configuration.
-        reset_joints_left = np.deg2rad([0, -90, -90, -90, 90, 0, 0])
-        reset_joints_right = np.deg2rad([0, -90, 90, -90, -90, 0, 0])
-        reset_joints = np.concatenate([reset_joints_left, reset_joints_right])
+        if args.start_joints is not None:
+            # 7 valores: a mesma pose nos dois bracos; 14 valores: esquerdo
+            # e direito (ex. sim_ur_bimanual, com o esquerdo espelhado).
+            reset_joints = np.resize(args.start_joints, 14)
+        else:
+            reset_joints_left = np.deg2rad([0, -90, -90, -90, 90, 0, 0])
+            reset_joints_right = np.deg2rad([0, -90, 90, -90, -90, 0, 0])
+            reset_joints = np.concatenate([reset_joints_left, reset_joints_right])
         curr_joints = env.get_obs()["joint_positions"]
         max_delta = (np.abs(curr_joints - reset_joints)).max()
         steps = min(int(max_delta / 0.01), 100)

@@ -150,6 +150,102 @@ def build_scene(robot_xml_path: str, gripper_xml_path: Optional[str] = None):
     return arena
 
 
+# Nomes dos dois braços na cena bimanual. Cada braço fica com este prefixo
+# nos nomes do MuJoCo (ex. "left/shoulder_pan_joint"). A ordem define a ordem
+# do vetor de juntas: primeiro o braço esquerdo (7 valores), depois o direito.
+BIMANUAL_ARMS = ("left", "right")
+
+# Os dois braços são o simétrico um do outro (como os dois GELLOs): o
+# esquerdo usa a pose de referência espelhada (cotovelo para o outro lado).
+# Na pose de referência os dois antebraços apontam para dentro, um para o
+# outro, como os GELLOs na bancada. Rodar aqui as bases (graus, em torno do
+# eixo vertical) se a montagem real mudar.
+BIMANUAL_BASE_YAW_DEG = {"left": 0.0, "right": 0.0}
+BIMANUAL_HOME_DEG = {
+    "left": [0, -90, -90, -90, 90, 0, 0],
+    "right": [0, -90, 90, -90, -90, 0, 0],
+}
+
+
+def add_shared_table_and_objects(arena: mjcf.RootElement, arm_spacing: float) -> None:
+    """Mesa comprida em frente dos dois UR5, caixa ao centro e um cubo por braço.
+
+    A caixa fica a meio, ao alcance dos dois braços, para se poder passar um
+    cubo de um robô para o outro ou pô-lo dentro da caixa.
+    """
+    table_y = -0.5
+    table_half_x = arm_spacing / 2 + 0.4  # cobre os dois braços
+    table_half_y = 0.4
+    table_half_height = 0.05
+    table_top_z = 0.10
+
+    table = arena.worldbody.add(
+        "body", name="table", pos=(0, table_y, table_top_z - table_half_height)
+    )
+    table.add(
+        "geom",
+        name="table_top",
+        type="box",
+        size=(table_half_x, table_half_y, table_half_height),
+        rgba=(0.55, 0.35, 0.2, 1),
+    )
+
+    # Caixa aberta em cima, ao centro da mesa
+    wall = 0.005
+    inner = 0.12
+    box = arena.worldbody.add("body", name="box", pos=(0, table_y, table_top_z))
+    for name, size, pos in (
+        ("box_bottom", (inner, inner, wall), (0, 0, wall)),
+        ("box_wall_pos_x", (wall, inner, 0.05), (inner, 0, 0.05)),
+        ("box_wall_neg_x", (wall, inner, 0.05), (-inner, 0, 0.05)),
+        ("box_wall_pos_y", (inner, wall, 0.05), (0, inner, 0.05)),
+        ("box_wall_neg_y", (inner, wall, 0.05), (0, -inner, 0.05)),
+    ):
+        box.add("geom", name=name, type="box", size=size, pos=pos, rgba=(0.2, 0.3, 0.8, 1))
+
+    # Um cubo em frente de cada braço (vermelho à esquerda, verde à direita)
+    cube_half = 0.015
+    colors = {"left": (0.9, 0.2, 0.1, 1), "right": (0.1, 0.7, 0.2, 1)}
+    for side, sign in zip(BIMANUAL_ARMS, (-1, 1)):
+        cube = arena.worldbody.add(
+            "body",
+            name=f"cube_{side}",
+            pos=(sign * arm_spacing / 2, table_y, table_top_z + cube_half),
+        )
+        cube.add("freejoint", name=f"cube_{side}_joint")
+        cube.add(
+            "geom", name=f"cube_{side}_geom", type="box",
+            size=(cube_half, cube_half, cube_half), rgba=colors[side], mass=0.05,
+        )
+
+
+def build_bimanual_scene(
+    robot_xml_path: str, gripper_xml_path: str, arm_spacing: float = 1.12
+) -> mjcf.RootElement:
+    """Dois UR5 com garra, lado a lado no eixo X, virados para a mesma mesa.
+
+    arm_spacing: distância entre as bases dos dois braços, em metros.
+    """
+    arena = mjcf.RootElement()
+    for side, sign in zip(BIMANUAL_ARMS, (-1, 1)):
+        arm = mjcf.from_path(robot_xml_path)
+        arm.model = side  # prefixo dos nomes, evita nomes repetidos
+        attach_hand_to_arm(arm, mjcf.from_path(gripper_xml_path))
+        frame = arena.worldbody.attach(arm)
+        frame.pos = (sign * arm_spacing / 2, 0, 0)
+        half_yaw = np.deg2rad(BIMANUAL_BASE_YAW_DEG[side]) / 2
+        frame.quat = (np.cos(half_yaw), 0, 0, np.sin(half_yaw))
+
+    # Cada braço traz o seu keyframe "home" só com as suas juntas; com dois
+    # braços e os cubos esses keyframes ficam incompletos e o MuJoCo recusa o
+    # modelo. Não são usados pela simulação, por isso saem.
+    for key in arena.find_all("key"):
+        key.remove()
+
+    add_shared_table_and_objects(arena, arm_spacing)
+    return arena
+
+
 class ZMQServerThread(threading.Thread):
     def __init__(self, server):
         super().__init__()
@@ -250,6 +346,9 @@ class MujocoRobotServer:
     def num_dofs(self) -> int:
         return self._num_joints
 
+    def _read_joint_state(self) -> np.ndarray:
+        return self._data.qpos.copy()[: self._num_joints]
+
     def get_joint_state(self) -> np.ndarray:
         return self._joint_state
 
@@ -308,7 +407,7 @@ class MujocoRobotServer:
                 self._data.ctrl[:] = self._joint_cmd
                 # self._data.qpos[:] = self._joint_cmd
                 mujoco.mj_step(self._model, self._data)
-                self._joint_state = self._data.qpos.copy()[: self._num_joints]
+                self._joint_state = self._read_joint_state()
 
                 if self._print_joints:
                     print(self._joint_state)
@@ -328,3 +427,103 @@ class MujocoRobotServer:
 
     def __del__(self) -> None:
         self.stop()
+
+
+class MujocoBimanualRobotServer(MujocoRobotServer):
+    """Dois UR5 com garra na mesma cena, servidos como um único robô de 14 DoF.
+
+    O vetor de juntas é [6 juntas + garra do braço esquerdo, 6 juntas + garra
+    do braço direito], o mesmo formato que o BimanualAgent do run_env.py
+    (--bimanual) envia.
+    """
+
+    def __init__(
+        self,
+        xml_path: str,
+        gripper_xml_path: str,
+        host: str = "127.0.0.1",
+        port: int = 5556,
+        print_joints: bool = False,
+        arm_spacing: float = 1.12,
+    ):
+        arena = build_bimanual_scene(xml_path, gripper_xml_path, arm_spacing)
+
+        assets: Dict[str, str] = {}
+        for asset in arena.asset.all_children():
+            if asset.tag == "mesh":
+                f = asset.file
+                assets[f.get_vfs_filename()] = asset.file.contents
+
+        self._model = mujoco.MjModel.from_xml_string(arena.to_xml_string(), assets)
+        self._data = mujoco.MjData(self._model)
+        self._num_joints = self._model.nu
+
+        # Na cena com dois braços o qpos já não começa pelas juntas do robô
+        # (cada garra tem 8 juntas internas), por isso as posições são lidas
+        # pelo nome de cada junta.
+        joint_names = []
+        for side in BIMANUAL_ARMS:
+            joint_names += [
+                f"{side}/{j}"
+                for j in (
+                    "shoulder_pan_joint",
+                    "shoulder_lift_joint",
+                    "elbow_joint",
+                    "wrist_1_joint",
+                    "wrist_2_joint",
+                    "wrist_3_joint",
+                    "robotiq_2f85/right_driver_joint",
+                )
+            ]
+        joint_ids = [self._model.joint(n).id for n in joint_names]
+        self._qpos_idx = self._model.jnt_qposadr[joint_ids]
+        self._qvel_idx = self._model.jnt_dofadr[joint_ids]
+        self._gripper_idx = [6, 13]  # posição das garras no vetor de juntas
+        self._ee_site_ids = [
+            self._model.site(f"{side}/attachment_site").id for side in BIMANUAL_ARMS
+        ]
+
+        # Os dois braços arrancam já na pose de referência (forma em "L").
+        # Com todas as juntas a zero cada UR5 fica esticado na horizontal
+        # (~1 m) e podia nascer dentro da mesa ou do outro braço.
+        home = np.deg2rad(
+            np.concatenate([BIMANUAL_HOME_DEG[side] for side in BIMANUAL_ARMS])
+        )
+        self._data.qpos[self._qpos_idx] = home
+        mujoco.mj_forward(self._model, self._data)
+
+        self._joint_state = self._read_joint_state()
+        self._joint_cmd = home.copy()
+
+        self._zmq_server = ZMQRobotServer(robot=self, host=host, port=port)
+        self._zmq_server_thread = ZMQServerThread(self._zmq_server)
+        self._print_joints = print_joints
+
+    def _read_joint_state(self) -> np.ndarray:
+        return self._data.qpos[self._qpos_idx].copy()
+
+    def command_joint_state(self, joint_state: np.ndarray) -> None:
+        assert len(joint_state) == self._num_joints, (
+            f"Expected joint state of length {self._num_joints}, "
+            f"got {len(joint_state)}."
+        )
+        _joint_state = joint_state.copy()
+        # A garra do GELLO vai de 0 (aberta) a 1 (fechada); o atuador da
+        # Robotiq 2F-85 no MuJoCo vai de 0 a 255.
+        _joint_state[self._gripper_idx] = _joint_state[self._gripper_idx] * 255
+        self._joint_cmd = _joint_state
+
+    def get_observations(self) -> Dict[str, np.ndarray]:
+        ee_pos_quat = []
+        for site_id in self._ee_site_ids:
+            ee_quat = np.zeros(4)
+            mujoco.mju_mat2Quat(ee_quat, self._data.site_xmat[site_id])
+            ee_pos_quat.append(np.concatenate([self._data.site_xpos[site_id], ee_quat]))
+        joint_positions = self._read_joint_state()
+        return {
+            "joint_positions": joint_positions,
+            "joint_velocities": self._data.qvel[self._qvel_idx].copy(),
+            "ee_pos_quat": np.concatenate(ee_pos_quat),
+            # array com as duas garras, para o BimanualAgent dividir ao meio
+            "gripper_position": joint_positions[self._gripper_idx],
+        }

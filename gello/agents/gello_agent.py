@@ -25,6 +25,10 @@ class DynamixelRobotConfig:
     gripper_config: Tuple[int, int, int]
     """The gripper config of GELLO. This is a tuple of (gripper_joint_id, degrees in open_position, degrees in closed_position)."""
 
+    baudrate: int = 57600
+    """Velocidade do barramento Dynamixel. 57600 e o valor de fabrica; os
+    GELLOs do laboratorio INESC estao a 1000000."""
+
     def __post_init__(self):
         assert len(self.joint_ids) == len(self.joint_offsets)
         assert len(self.joint_ids) == len(self.joint_signs)
@@ -38,6 +42,7 @@ class DynamixelRobotConfig:
             real=True,
             joint_signs=list(self.joint_signs),
             port=port,
+            baudrate=self.baudrate,
             gripper_config=self.gripper_config,
             start_joints=start_joints,
         )
@@ -72,9 +77,10 @@ GELLO_UR5 = DynamixelRobotConfig(
 PORT_CONFIG_MAP: Dict[str, DynamixelRobotConfig] = {
     # Porta em que o adaptador U2D2 aparece (macOS). Noutro computador/SO o
     # nome muda (ex. /dev/ttyUSB0 em Linux) - acrescentar aqui a entrada.
-    "/dev/cu.usbserial-FTBENW9B8": GELLO_UR5,
+    # GELLO preto (braco DIREITO na simulacao sim_ur_bimanual), FTBENXKL
+    "/dev/cu.usbserial-FTBENXKL": GELLO_UR5,
     # xArm
-    "/dev/cu.usbserial-FTBENW9B8": DynamixelRobotConfig(
+    "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT3M9NVB-if00-port0": DynamixelRobotConfig(
         joint_ids=(1, 2, 3, 4, 5, 6, 7),
         joint_offsets=(
             3 * np.pi / 2,
@@ -134,19 +140,25 @@ PORT_CONFIG_MAP: Dict[str, DynamixelRobotConfig] = {
         joint_signs=(1, 1, -1, 1, 1, 1),
         gripper_config=(7, 286, 248),
     ),
-        # UR INESC
+    # GELLO laranja (braco ESQUERDO na simulacao sim_ur_bimanual), adaptador
+    # FTBENW9B, servos a 1000000 baud. E o simetrico do GELLO preto, por isso
+    # foi calibrado na pose de referencia espelhada (2026-10-15):
+    #   python scripts/gello_get_offset.py --port /dev/cu.usbserial-FTBENW9B \
+    #       --baudrate 1000000 --start-joints 0 -1.57 -1.57 -1.57 1.57 0 \
+    #       --joint-signs 1 1 -1 1 1 1
     "/dev/cu.usbserial-FTBENW9B": DynamixelRobotConfig(
         joint_ids=(1, 2, 3, 4, 5, 6),
         joint_offsets=(
-            0,
-            1 * np.pi / 2 + np.pi,
-            np.pi / 2 + 0 * np.pi,
-            0 * np.pi + np.pi / 2,
-            np.pi - 2 * np.pi / 2,
-            -1 * np.pi / 2 + 2 * np.pi,
+            1 * np.pi / 2,
+            4 * np.pi / 2,
+            2 * np.pi / 2,
+            2 * np.pi / 2,
+            0 * np.pi / 2,
+            1 * np.pi / 2,
         ),
         joint_signs=(1, 1, -1, 1, 1, 1),
-        gripper_config=(7, 20, -22),
+        gripper_config=(7, 195.44453125, 153.64453125),
+        baudrate=1000000,
     ),
 }
 

@@ -13,6 +13,8 @@ class Args:
     robot_port: int = 6001
     hostname: str = "127.0.0.1"
     robot_ip: str = "192.168.1.10"
+    arm_spacing: float = 1.12
+    """So para sim_ur_bimanual: distancia entre as bases dos dois UR5 (m)."""
 
 
 def launch_robot_server(args: Args):
@@ -27,6 +29,23 @@ def launch_robot_server(args: Args):
 
         server = MujocoRobotServer(
             xml_path=xml, gripper_xml_path=gripper_xml, port=port, host=args.hostname
+        )
+        server.serve()
+    elif args.robot == "sim_ur_bimanual":
+        # Dois UR5e + Robotiq 2F-85 lado a lado, para dois GELLOs
+        MENAGERIE_ROOT: Path = (
+            Path(__file__).parent.parent / "third_party" / "mujoco_menagerie"
+        )
+        xml = MENAGERIE_ROOT / "universal_robots_ur5e" / "ur5e.xml"
+        gripper_xml = MENAGERIE_ROOT / "robotiq_2f85" / "2f85.xml"
+        from gello.robots.sim_robot import MujocoBimanualRobotServer
+
+        server = MujocoBimanualRobotServer(
+            xml_path=str(xml),
+            gripper_xml_path=str(gripper_xml),
+            port=port,
+            host=args.hostname,
+            arm_spacing=args.arm_spacing,
         )
         server.serve()
     elif args.robot == "sim_yam":
@@ -94,7 +113,7 @@ def launch_robot_server(args: Args):
 
         else:
             raise NotImplementedError(
-                f"Robot {args.robot} not implemented, choose one of: sim_ur, xarm, ur, bimanual_ur, none"
+                f"Robot {args.robot} not implemented, choose one of: sim_ur, sim_ur_bimanual, xarm, ur, bimanual_ur, none"
             )
         server = ZMQServerRobot(robot, port=port, host=args.hostname)
         print(f"Starting robot server on port {port}")
